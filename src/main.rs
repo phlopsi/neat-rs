@@ -525,7 +525,7 @@ fn sigmoid(x: f64) -> f64 {
     1f64 / (1f64 + (-x).exp())
 }
 
-fn genetic_distance<'a, 'b>(mut genes1: &[ConnectionGene], mut genes2: &[ConnectionGene]) -> f64 {
+fn genetic_distance<'a, 'b>(genes1: &[ConnectionGene], genes2: &[ConnectionGene]) -> f64 {
     use ::core::cmp::Ordering;
     use ::core::hint::unreachable_unchecked;
 
