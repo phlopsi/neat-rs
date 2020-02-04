@@ -12,4 +12,4 @@ const CACHE_LINE_SIZE: usize = 64;
 #[allow(dead_code)]
 type CacheLinePadding = ::core::mem::MaybeUninit<[u8; CACHE_LINE_SIZE]>;
 
-type Value = f64;
+type Value = f32;

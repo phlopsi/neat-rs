@@ -1,3 +1,4 @@
+use crate::Value;
 use ::core::cmp::Ordering;
 use ::core::hint::unreachable_unchecked;
 use ::rustc_hash::FxHashMap;
@@ -16,6 +17,7 @@ pub struct Population {
     pub ideal_population_size: usize,
     pub mutate_add_node_history: FxHashMap<ConnectionGeneId, NodeGeneId>,
     pub mutate_add_connection_history: FxHashMap<(NodeGeneId, NodeGeneId), ConnectionGeneId>,
+    pub solution: Option<Organism>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,11 +28,27 @@ pub struct Organism {
     pub age: u8,
 }
 
+impl Organism {
+    pub fn number_of_hidden_node_genes(&self) -> usize {
+        (&self.node_genes)
+            .into_iter()
+            .filter(|node_gene| node_gene.category.is_hidden())
+            .count()
+    }
+
+    pub fn number_of_enabled_connection_genes(&self) -> usize {
+        (&self.connection_genes)
+            .into_iter()
+            .filter(|connection_gene| connection_gene.state.is_enabled())
+            .count()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NodeGene {
     pub id: NodeGeneId,
     pub category: NodeGeneCategory,
-    pub value: f64,
+    pub value: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -39,8 +57,8 @@ pub struct ConnectionGene {
     pub source_id: NodeGeneId,
     pub target_id: NodeGeneId,
     pub state: ConnectionGeneState,
-    pub weight: f64,
-    pub value: f64,
+    pub weight: Value,
+    pub value: Value,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -185,7 +203,7 @@ impl Species {
                     },
                 )
                 .0
-                / (1.0 + self.remaining.len() as f64),
+                / (1.0 + self.remaining.len() as Value),
         )
     }
 
@@ -196,10 +214,10 @@ impl Species {
 }
 
 #[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
-pub struct CheckedF64(f64);
+pub struct CheckedF64(Value);
 
 impl CheckedF64 {
-    pub(crate) fn new(f: f64) -> Self {
+    pub(crate) fn new(f: Value) -> Self {
         assert!(!f.is_nan());
 
         Self(f)
@@ -209,7 +227,7 @@ impl CheckedF64 {
         Self(0.0)
     }
 
-    pub fn as_f64(self) -> f64 {
+    pub fn as_float(self) -> Value {
         self.0
     }
 }

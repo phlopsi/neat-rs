@@ -21,77 +21,46 @@ fn main() {
         fitness,
     );
 
-    // eprintln!(
-    //     "Initialize population: {} µs",
-    //     instant.elapsed().as_micros()
-    // );
-
-    // Speciate population
-    // let instant = std::time::Instant::now();
-    let mut genus = speciate(&population.organisms, NUMBER_OF_SPECIES);
-    // eprintln!("Speciate population: {} µs", instant.elapsed().as_micros());
-
-    // genus.iter().enumerate().for_each(|(index, species)| {
-    //     eprintln!(
-    //         "Species #{}: {} organisms / fitness: {}",
-    //         index,
-    //         1 + species.remaining.len(),
-    //         species.fitness(&population.organisms).as_f64()
-    //     );
-    // });
+    let mut genus;
+    let mut loop_count = 0;
+    let mut duration = std::time::Duration::default();
 
     loop {
-        // generation += 1;
-        // eprintln!("GENERATION #{}", generation);
-
-        // Reproduce population
-        // let instant = std::time::Instant::now();
+        loop_count += 1;
+        let instant = std::time::Instant::now();
+        genus = speciate(&population.organisms, NUMBER_OF_SPECIES);
         reproduce(&mut population, genus, fitness, &mut thread_rng);
-        // eprintln!("Reproduce population: {} µs", instant.elapsed().as_micros());
-
-        // Speciate population
-        // let instant = std::time::Instant::now();
         genus = speciate(&population.organisms, NUMBER_OF_SPECIES);
-        // eprintln!("Speciate population: {} µs", instant.elapsed().as_micros());
-
-        // Eliminate population
-        // let instant = std::time::Instant::now();
-        eliminate(&mut population, genus);
-        // eprintln!("Eliminate population: {} µs", instant.elapsed().as_micros());
-
-        // Speciate population
-        // let instant = std::time::Instant::now();
+        eliminate_a(&mut population.organisms, genus);
         genus = speciate(&population.organisms, NUMBER_OF_SPECIES);
-        // eprintln!("Speciate population: {} µs", instant.elapsed().as_micros());
+        eliminate_b(&mut population, genus);
+        age(&mut population.organisms);
 
-        // genus.iter().enumerate().for_each(|(index, species)| {
-        //     eprintln!(
-        //         "Species #{}: {} organisms / fitness: {}",
-        //         index,
-        //         1 + species.remaining.len(),
-        //         species.fitness(&population.organisms).as_f64()
-        //     );
-        // });
+        refill(
+            &mut population.organisms,
+            population.ideal_population_size,
+            &population.initial_organism,
+        );
 
-        // println!("\nPress ENTER to continue...");
+        duration += instant.elapsed();
 
-        // ::std::io::stdin()
-        //     .read_line(&mut ::std::string::String::default())
-        //     .unwrap();
+        if loop_count == 1000 {
+            eprintln!("loop: {} ms", duration.as_millis());
+            loop_count = 0;
+            duration = std::time::Duration::default();
+        }
     }
 }
 
 #[inline]
-fn fitness(context: &mut EvaluationContext) -> f64 {
-    100.0
-        - average_cost(
-            &[&[0f64], &[1f64], &[0f64], &[1f64]],
-            &[
-                &evaluate(&mut *context, &[0f64, 0f64]),
-                &evaluate(&mut *context, &[1f64, 0f64]),
-                &evaluate(&mut *context, &[1f64, 1f64]),
-                &evaluate(&mut *context, &[0f64, 1f64]),
-            ],
-        ) * 100.0
-            / 4.0
+fn fitness(context: &mut EvaluationContext) -> f32 {
+    1.0 - average_cost(
+        &[&[0.0], &[1.0], &[0.0], &[1.0]],
+        &[
+            &evaluate(&mut *context, &[0.0, 0.0]),
+            &evaluate(&mut *context, &[1.0, 0.0]),
+            &evaluate(&mut *context, &[1.0, 1.0]),
+            &evaluate(&mut *context, &[0.0, 1.0]),
+        ],
+    ) / 4.0
 }

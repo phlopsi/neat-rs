@@ -1,8 +1,11 @@
 use crate::types::*;
+use crate::Value;
 use ::core::cmp::Ordering;
 use ::core::hint::unreachable_unchecked;
 use ::core::ops::DerefMut;
 use ::rustc_hash::FxHashMap;
+
+const MAXIMUM_AGE: u8 = 30;
 
 const MAX_DISTANCE_QUEUE_SIZE: usize = 1;
 const MAX_EVALUATION_QUEUE_SIZE: usize = 100;
@@ -11,22 +14,22 @@ const MAX_EVALUATION_QUEUE_SIZE: usize = 100;
 // const PROBABILITY_MATE_ONLY: f32 = 0.2;
 // const PROBABILITY_MATE_AND_MUTATE: f32 = 1.0 - PROBABILITY_MUTATE_ONLY - PROBABILITY_MATE_ONLY;
 
-const PROBABILITY_ADD_NODE: f32 = 0.001;
-const PROBABILITY_ADD_CONNECTION: f32 = 0.03;
+const PROBABILITY_ADD_NODE: f32 = 0.03;
+const PROBABILITY_ADD_CONNECTION: f32 = 0.05;
 const PROBABILITY_MUTATE_WEIGHTS: f32 = 1.0 - PROBABILITY_ADD_NODE - PROBABILITY_ADD_CONNECTION;
 
-const WEIGHT_MUTATION_POWER: f64 = 2.0;
+const WEIGHT_MUTATION_POWER: Value = 2.0;
 
-const COEFFICIENT_EXCESS_GENES: f64 = 1.0;
-const COEFFICIENT_DISJOINT_GENES: f64 = 1.0;
-const COEFFICIENT_WEIGHT_DIFFERENCE: f64 = 1.0;
+const COEFFICIENT_EXCESS_GENES: Value = 1.0;
+const COEFFICIENT_DISJOINT_GENES: Value = 1.0;
+const COEFFICIENT_WEIGHT_DIFFERENCE: Value = 1.0;
 
 #[inline]
 pub fn initialize(
     pop_size: usize,
     num_input: usize,
     num_output: usize,
-    mut fitness: impl FnMut(&mut EvaluationContext) -> f64,
+    mut fitness: impl FnMut(&mut EvaluationContext) -> Value,
 ) -> Population {
     const NUM_BIAS: usize = 1;
 
@@ -97,14 +100,15 @@ pub fn initialize(
         ideal_population_size: pop_size,
         mutate_add_node_history: Default::default(),
         mutate_add_connection_history: Default::default(),
+        solution: None,
     }
 }
 
 #[inline]
 pub fn evaluate<'a, 'b, 'c>(
     mut context: impl DerefMut<Target = EvaluationContext<'a, 'b, 'c>>,
-    input_values: &[f64],
-) -> Vec<f64> {
+    input_values: &[Value],
+) -> Vec<Value> {
     use arraydeque::ArrayDeque;
     use rustc_hash::FxHashSet;
     use std::hash::BuildHasherDefault;
@@ -141,7 +145,7 @@ pub fn evaluate<'a, 'b, 'c>(
             .iter()
             .zip(input_values)
             .map(|(node_gene_id, value)| (*node_gene_id, *value))
-            .collect::<Vec<(NodeGeneId, f64)>>();
+            .collect::<Vec<(NodeGeneId, Value)>>();
 
         for (node_gene_id, value) in zipped {
             node_gene_mut(&mut organism.node_genes, node_gene_id).value = value;
@@ -208,7 +212,7 @@ pub fn evaluate<'a, 'b, 'c>(
 
     // Retrieve outputs
     let output_values = {
-        let mut output_values = Vec::<f64>::with_capacity(outputs.len());
+        let mut output_values = Vec::<Value>::with_capacity(outputs.len());
 
         for node_gene_id in *outputs {
             output_values.push(node_gene(&organism.node_genes, *node_gene_id).value);
@@ -509,7 +513,7 @@ fn mutate_change_connection_weight(
 pub fn reproduce(
     population: &mut Population,
     genus: Vec<Species>,
-    mut fitness: impl FnMut(&mut EvaluationContext) -> f64,
+    mut fitness: impl FnMut(&mut EvaluationContext) -> Value,
     thread_rng: &mut rand::rngs::ThreadRng,
 ) {
     use rand::distributions::weighted::alias_method::WeightedIndex;
@@ -541,8 +545,8 @@ pub fn reproduce(
     organisms.reserve(organisms.len() + genus.len());
 
     for species in genus {
-        let offspring = (total_offspring as f64 * species.fitness(organisms).as_f64()
-            / total_fitness.as_f64())
+        let offspring = (total_offspring as Value * species.fitness(organisms).as_float()
+            / total_fitness.as_float())
         .ceil() as usize;
 
         let organism_indices = ::core::iter::once(species.representative)
@@ -554,12 +558,15 @@ pub fn reproduce(
             )
             .collect::<Vec<_>>();
 
-        for _ in 0..offspring {
+        let mut current_offspring = 0;
+
+        while current_offspring < offspring {
             let organism_index = *organism_indices
                 .choose(thread_rng)
                 .expect(format!("{}:{}:{}", file!(), line!(), column!()).as_str());
 
             let mut cloned = unsafe { organisms.get_unchecked(organism_index) }.clone();
+            cloned.age = 0;
             let sample = mutate_distribution.sample(thread_rng);
 
             match sample {
@@ -581,25 +588,91 @@ pub fn reproduce(
                 _ => unreachable!(),
             }
 
-            cloned.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
-                organism: &mut cloned,
-                inputs: &population.inputs,
-                outputs: &population.outputs,
-            }));
+            match &population.solution {
+                None => {
+                    cloned.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
+                        organism: &mut cloned,
+                        inputs: &population.inputs,
+                        outputs: &population.outputs,
+                    }));
 
-            if cloned.fitness.as_f64() >= 99.9 {
-                println!("{:#?}", cloned);
-                ::std::process::exit(0);
+                    if cloned.fitness.as_float() == 1.0 {
+                        eprintln!(
+                            "FOUND SOLUTION: {} hidden node genes; {} enabled connection genes",
+                            cloned.number_of_hidden_node_genes(),
+                            cloned.number_of_enabled_connection_genes()
+                        );
+
+                        eliminate_bad_organisms(organisms, &cloned);
+                        population.solution = Some(cloned);
+                        return;
+                    } else {
+                        current_offspring += 1;
+                        organisms.push(cloned);
+                    }
+                }
+                Some(solution) => match cloned
+                    .number_of_hidden_node_genes()
+                    .cmp(&solution.number_of_hidden_node_genes())
+                {
+                    Ordering::Less => {
+                        cloned.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
+                            organism: &mut cloned,
+                            inputs: &population.inputs,
+                            outputs: &population.outputs,
+                        }));
+
+                        if cloned.fitness.as_float() == 1.0 {
+                            eprintln!(
+                                "FOUND BETTER SOLUTION: {} hidden node genes; {} enabled connection genes",
+                                cloned.number_of_hidden_node_genes(),
+                                cloned.number_of_enabled_connection_genes()
+                            );
+
+                            eliminate_bad_organisms(organisms, &cloned);
+                            population.solution = Some(cloned);
+                            return;
+                        } else {
+                            current_offspring += 1;
+                            organisms.push(cloned);
+                        }
+                    }
+                    Ordering::Equal => {
+                        if cloned.number_of_enabled_connection_genes()
+                            < solution.number_of_enabled_connection_genes()
+                        {
+                            cloned.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
+                                organism: &mut cloned,
+                                inputs: &population.inputs,
+                                outputs: &population.outputs,
+                            }));
+
+                            if cloned.fitness.as_float() == 1.0 {
+                                eprintln!(
+                                    "FOUND BETTER SOLUTION: {} hidden node genes; {} enabled connection genes",
+                                    cloned.number_of_hidden_node_genes(),
+                                    cloned.number_of_enabled_connection_genes()
+                                );
+
+                                eliminate_bad_organisms(organisms, &cloned);
+                                population.solution = Some(cloned);
+                                return;
+                            } else {
+                                current_offspring += 1;
+                                organisms.push(cloned);
+                            }
+                        }
+                    }
+                    Ordering::Greater => {}
+                },
             }
-
-            organisms.push(cloned);
         }
     }
 }
 
 #[inline]
-fn sigmoid(x: f64) -> f64 {
-    1f64 / (1f64 + (-x).exp())
+fn sigmoid(x: Value) -> Value {
+    1.0 / (1.0 + (-x).exp())
 }
 
 // let mut genes1 = genes1.iter().peekable();
@@ -635,7 +708,7 @@ pub(crate) fn genetic_distance<'a, 'b>(
     genes1: &[ConnectionGene],
     genes2: &[ConnectionGene],
 ) -> CheckedF64 {
-    let mut number_of_matching_genes = 0;
+    let mut number_of_matching_genes: u8 = 0;
     let mut number_of_disjoint_genes = 0;
     let mut total_weight_difference = 0.0;
     let number_of_excess_genes;
@@ -710,34 +783,34 @@ pub(crate) fn genetic_distance<'a, 'b>(
     let average_weight_difference;
 
     if number_of_matching_genes > 0 {
-        average_weight_difference = total_weight_difference / f64::from(number_of_matching_genes);
+        average_weight_difference = total_weight_difference / Value::from(number_of_matching_genes);
     } else {
         average_weight_difference = 0.0;
     }
 
-    let max_len = ::core::cmp::max(1, ::core::cmp::max(genes1_len, genes2_len)) as f64;
+    let max_len = ::core::cmp::max(1, ::core::cmp::max(genes1_len, genes2_len)) as Value;
 
     return CheckedF64::new(
-        (number_of_excess_genes as f64 * COEFFICIENT_EXCESS_GENES
-            + number_of_disjoint_genes as f64 * COEFFICIENT_DISJOINT_GENES)
+        (number_of_excess_genes as Value * COEFFICIENT_EXCESS_GENES
+            + number_of_disjoint_genes as Value * COEFFICIENT_DISJOINT_GENES)
             / max_len
             + average_weight_difference * COEFFICIENT_WEIGHT_DIFFERENCE,
     );
 }
 
 #[inline]
-fn cost(expected_output: &[f64], actual_output: &[f64]) -> f64 {
+fn cost(expected_output: &[Value], actual_output: &[Value]) -> Value {
     assert_eq!(expected_output.len(), actual_output.len());
 
     expected_output
         .iter()
         .zip(actual_output.iter())
         .map(|(expected_value, actual_value)| (expected_value - actual_value).powi(2))
-        .fold(0f64, |accumulator, x| accumulator + x)
+        .fold(0.0, |accumulator, x| accumulator + x)
 }
 
 #[inline]
-pub fn average_cost(expected_outputs: &[&[f64]], actual_outputs: &[&[f64]]) -> f64 {
+pub fn average_cost(expected_outputs: &[&[Value]], actual_outputs: &[&[Value]]) -> Value {
     assert_eq!(expected_outputs.len(), actual_outputs.len());
 
     for (expected_output, actual_output) in expected_outputs.iter().zip(actual_outputs.iter()) {
@@ -748,8 +821,8 @@ pub fn average_cost(expected_outputs: &[&[f64]], actual_outputs: &[&[f64]]) -> f
         .iter()
         .zip(actual_outputs.iter())
         .map(|(expected_output, actual_output)| cost(expected_output, actual_output))
-        .fold(0f64, |accumulator, x| accumulator + x)
-        / (actual_outputs.len() as f64)
+        .fold(0.0, |accumulator, x| accumulator + x)
+        / (actual_outputs.len() as Value)
 }
 
 type Fitness = CheckedF64;
@@ -868,18 +941,51 @@ pub fn speciate(organisms: &[Organism], target_number_of_species: usize) -> Vec<
     return species_list;
 }
 
-pub fn eliminate(population: &mut Population, genus: Vec<Species>) {
+pub fn age(organisms: &mut Vec<Organism>) {
+    for organism in organisms {
+        organism.age = organism.age.saturating_add(1);
+    }
+}
+
+pub fn eliminate_a(organisms: &mut Vec<Organism>, genus: Vec<Species>) {
+    let mut to_be_eliminated_organisms = genus
+        .iter()
+        .filter(|species| organisms[species.representative].age == MAXIMUM_AGE)
+        .flat_map(|species| {
+            eprintln!(
+                "Dropped species with the following representative: {:?}",
+                organisms[species.representative].fitness.as_float()
+            );
+            ::core::iter::once(species.representative)
+                .chain(
+                    species
+                        .remaining
+                        .iter()
+                        .map(|speciated_organism| speciated_organism.organism_index),
+                )
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    to_be_eliminated_organisms.sort_unstable_by(|a, b| b.cmp(a));
+
+    for organism_index in to_be_eliminated_organisms {
+        organisms.remove(organism_index);
+    }
+}
+
+pub fn eliminate_b(population: &mut Population, genus: Vec<Species>) {
     let organisms = &mut population.organisms;
     let population_size = organisms.len();
-    let ideal_population_size = population.ideal_population_size;
-    let total_deaths = population_size - ideal_population_size;
+    let ideal_population_size = population.ideal_population_size - 1;
+    let total_deaths = population_size.saturating_sub(ideal_population_size);
     let mortal_population_size = population_size - genus.len();
-    let mortality_rate = total_deaths as f64 / mortal_population_size as f64;
+    let mortality_rate = total_deaths as Value / mortal_population_size as Value;
 
     let mut to_be_eliminated_organisms = genus
         .into_iter()
         .flat_map(|species| {
-            let deaths = (species.remaining.len() as f64 * mortality_rate).ceil() as usize;
+            let deaths = (species.remaining.len() as Value * mortality_rate).ceil() as usize;
 
             let mut organism_indices = ::core::iter::once(species.representative)
                 .chain(
@@ -904,21 +1010,27 @@ pub fn eliminate(population: &mut Population, genus: Vec<Species>) {
     for organism_index in to_be_eliminated_organisms {
         organisms.remove(organism_index);
     }
+}
 
+pub fn refill(
+    organisms: &mut Vec<Organism>,
+    ideal_population_size: usize,
+    initial_organism: &Organism,
+) {
     for _ in organisms.len()..ideal_population_size {
-        organisms.push(population.initial_organism.clone());
+        organisms.push(initial_organism.clone());
     }
 }
 
-pub fn exponential_linear_unit(x: f64, a: f64) -> f64 {
-    if x > 0f64 {
+pub fn exponential_linear_unit(x: Value, a: Value) -> Value {
+    if x > 0.0 {
         x
     } else {
-        (x.exp() - 1f64) * a
+        (x.exp() - 1.0) * a
     }
 }
 
-pub fn softmax(slice: &mut [f64]) {
+pub fn softmax(slice: &mut [Value]) {
     let mut sum = 0.0;
 
     for value in &mut *slice {
@@ -929,4 +1041,20 @@ pub fn softmax(slice: &mut [f64]) {
     for value in &mut *slice {
         *value /= sum;
     }
+}
+
+pub fn eliminate_bad_organisms(organisms: &mut Vec<Organism>, solution: &Organism) {
+    organisms.drain_filter(|organism| {
+        match organism
+            .number_of_hidden_node_genes()
+            .cmp(&solution.number_of_hidden_node_genes())
+        {
+            Ordering::Less => false,
+            Ordering::Equal => {
+                organism.number_of_enabled_connection_genes()
+                    >= solution.number_of_enabled_connection_genes()
+            }
+            Ordering::Greater => true,
+        }
+    });
 }
