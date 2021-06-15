@@ -23,13 +23,7 @@ const COEFFICIENT_DISJOINT_GENES: Value = 1.0;
 const COEFFICIENT_WEIGHT_DIFFERENCE: Value = 1.0;
 
 pub fn test_performance() {
-    fn fitness(
-        _context: &mut EvaluationContext,
-        _evaluated_node_genes: &mut FxHashSet<NodeGeneId>,
-        _evaluated_connection_genes: &mut FxHashSet<ConnectionGeneId>,
-        _queue: &mut VecDeque<NodeGeneId>,
-        _zipped: &mut Vec<(NodeGeneId, Value)>,
-    ) -> f32 {
+    fn fitness(_context: &mut EvaluationContext) -> f32 {
         0.0
     }
 
@@ -96,33 +90,29 @@ pub fn test_performance() {
         value: 0.0,
     });
 
-    let mut context = EvaluationContext {
-        organism: &mut o,
-        inputs: &population.inputs,
-        outputs: &population.outputs,
-    };
+    let mut evaled_node_genes = FxHashSet::<NodeGeneId>::with_hasher(BuildHasherDefault::default());
 
-    let mut evaluated_node_genes =
-        FxHashSet::<NodeGeneId>::with_hasher(BuildHasherDefault::default());
-
-    let mut evaluated_connection_genes =
+    let mut evaled_conn_genes =
         FxHashSet::<ConnectionGeneId>::with_hasher(BuildHasherDefault::default());
 
     let mut queue = VecDeque::<NodeGeneId>::new();
 
     let mut zipped = Vec::<(NodeGeneId, Value)>::new();
+
+    let mut context = EvaluationContext {
+        organism: &mut o,
+        inputs: &population.inputs,
+        outputs: &population.outputs,
+        evaled_node_genes: &mut evaled_node_genes,
+        evaled_conn_genes: &mut evaled_conn_genes,
+        queue: &mut queue,
+        zipped: &mut zipped,
+    };
+
     let mut output_values_0 = Vec::<Value>::new();
 
     let instant = ::std::time::Instant::now();
-    evaluate(
-        &mut context,
-        &[1.0, 1.0],
-        &mut evaluated_node_genes,
-        &mut evaluated_connection_genes,
-        &mut queue,
-        &mut zipped,
-        &mut output_values_0,
-    );
+    evaluate(&mut context, &[1.0, 1.0], &mut output_values_0);
     eprintln!("evaluate: {} ns", instant.elapsed().as_nanos());
 }
 
@@ -131,13 +121,7 @@ pub fn initialize(
     pop_size: usize,
     num_input: usize,
     num_output: usize,
-    mut fitness: impl FnMut(
-        &mut EvaluationContext,
-        &mut FxHashSet<NodeGeneId>,
-        &mut FxHashSet<ConnectionGeneId>,
-        &mut VecDeque<NodeGeneId>,
-        &mut Vec<(NodeGeneId, Value)>,
-    ) -> Value,
+    mut fitness: impl FnMut(&mut EvaluationContext) -> Value,
 ) -> Population {
     const NUM_BIAS: usize = 1;
 
@@ -184,26 +168,23 @@ pub fn initialize(
         outputs.push(id);
     }
 
-    let mut evaluated_node_genes =
-        FxHashSet::<NodeGeneId>::with_hasher(BuildHasherDefault::default());
+    let mut evaled_node_genes = FxHashSet::<NodeGeneId>::with_hasher(BuildHasherDefault::default());
 
-    let mut evaluated_connection_genes =
+    let mut evaled_conn_genes =
         FxHashSet::<ConnectionGeneId>::with_hasher(BuildHasherDefault::default());
 
     let mut queue = VecDeque::<NodeGeneId>::new();
     let mut zipped = Vec::<(NodeGeneId, Value)>::new();
 
-    organism.fitness = CheckedF64::new(fitness(
-        &mut EvaluationContext {
-            organism: &mut organism,
-            inputs: &inputs,
-            outputs: &outputs,
-        },
-        &mut evaluated_node_genes,
-        &mut evaluated_connection_genes,
-        &mut queue,
-        &mut zipped,
-    ));
+    organism.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
+        organism: &mut organism,
+        inputs: &inputs,
+        outputs: &outputs,
+        evaled_node_genes: &mut evaled_node_genes,
+        evaled_conn_genes: &mut evaled_conn_genes,
+        queue: &mut queue,
+        zipped: &mut zipped,
+    }));
 
     let mut organisms = Vec::<Organism>::with_capacity(pop_size);
 
@@ -228,13 +209,27 @@ pub fn initialize(
 }
 
 #[inline]
-pub fn evaluate<'a, 'b, 'c>(
-    mut context: impl DerefMut<Target = EvaluationContext<'a, 'b, 'c>>,
+pub fn evaluate<
+    'organism,
+    'inputs,
+    'outputs,
+    'evaled_node_genes,
+    'evaled_conn_genes,
+    'queue,
+    'zipped,
+>(
+    mut context: impl DerefMut<
+        Target = EvaluationContext<
+            'organism,
+            'inputs,
+            'outputs,
+            'evaled_node_genes,
+            'evaled_conn_genes,
+            'queue,
+            'zipped,
+        >,
+    >,
     input_values: &[Value],
-    evaluated_node_genes: &mut FxHashSet<NodeGeneId>,
-    evaluated_connection_genes: &mut FxHashSet<ConnectionGeneId>,
-    queue: &mut VecDeque<NodeGeneId>,
-    zipped: &mut Vec<(NodeGeneId, Value)>,
     output_values: &mut Vec<Value>,
 ) {
     const BIAS_ID: usize = 1;
@@ -243,17 +238,21 @@ pub fn evaluate<'a, 'b, 'c>(
         organism,
         inputs,
         outputs,
+        evaled_node_genes,
+        evaled_conn_genes,
+        queue,
+        zipped,
     } = &mut *context;
 
     assert_eq!(inputs.len(), input_values.len());
 
-    evaluated_node_genes.clear();
-    evaluated_connection_genes.clear();
+    evaled_node_genes.clear();
+    evaled_conn_genes.clear();
     queue.clear();
 
     // Initialize bias node gene value
     node_gene_mut(&mut organism.node_genes, BIAS_ID).value = 1.0;
-    evaluated_node_genes.insert(BIAS_ID);
+    evaled_node_genes.insert(BIAS_ID);
 
     // Evaluate network inputs
     {
@@ -265,19 +264,19 @@ pub fn evaluate<'a, 'b, 'c>(
                 .map(|(node_gene_id, value)| (*node_gene_id, *value)),
         );
 
-        for &mut (node_gene_id, value) in zipped {
+        for &mut (node_gene_id, value) in zipped.iter_mut() {
             node_gene_mut(&mut organism.node_genes, node_gene_id).value = value;
 
             // Extract into function? (Copy below)
             {
-                evaluated_node_genes.insert(node_gene_id);
+                evaled_node_genes.insert(node_gene_id);
 
                 for connection_gene in
                     outgoing_connection_genes_mut(&mut organism.connection_genes, node_gene_id)
                         .filter(|connection_gene| connection_gene.state.is_enabled())
                 {
                     connection_gene.value = value * connection_gene.weight;
-                    evaluated_connection_genes.insert(connection_gene.id);
+                    evaled_conn_genes.insert(connection_gene.id);
 
                     queue.push_back(connection_gene.target_id);
                 }
@@ -287,8 +286,8 @@ pub fn evaluate<'a, 'b, 'c>(
 
     // Evaluate the rest of the network
     {
-        'queue: while let Option::Some(node_gene_id) = queue.pop_front() {
-            if evaluated_node_genes.contains(&node_gene_id) {
+        'lbl_queue: while let Option::Some(node_gene_id) = queue.pop_front() {
+            if evaled_node_genes.contains(&node_gene_id) {
                 continue;
             }
 
@@ -298,8 +297,8 @@ pub fn evaluate<'a, 'b, 'c>(
                 incoming_connection_genes(&organism.connection_genes, node_gene_id)
                     .filter(|connection_gene| connection_gene.state.is_enabled())
             {
-                if !evaluated_connection_genes.contains(&connection_gene.id) {
-                    continue 'queue;
+                if !evaled_conn_genes.contains(&connection_gene.id) {
+                    continue 'lbl_queue;
                 }
 
                 value += connection_gene.value;
@@ -310,14 +309,14 @@ pub fn evaluate<'a, 'b, 'c>(
 
             // Extract into function? (Copied from above)
             {
-                evaluated_node_genes.insert(node_gene_id);
+                evaled_node_genes.insert(node_gene_id);
 
                 for connection_gene in
                     outgoing_connection_genes_mut(&mut organism.connection_genes, node_gene_id)
                         .filter(|connection_gene| connection_gene.state.is_enabled())
                 {
                     connection_gene.value = value * connection_gene.weight;
-                    evaluated_connection_genes.insert(connection_gene.id);
+                    evaled_conn_genes.insert(connection_gene.id);
                     queue.push_back(connection_gene.target_id);
                 }
             }
@@ -614,13 +613,7 @@ fn mutate_change_connection_weight(
 pub fn reproduce(
     population: &mut Population,
     genus: Vec<Species>,
-    mut fitness: impl FnMut(
-        &mut EvaluationContext,
-        &mut FxHashSet<NodeGeneId>,
-        &mut FxHashSet<ConnectionGeneId>,
-        &mut VecDeque<NodeGeneId>,
-        &mut Vec<(NodeGeneId, Value)>,
-    ) -> Value,
+    mut fitness: impl FnMut(&mut EvaluationContext) -> Value,
     thread_rng: &mut rand::rngs::ThreadRng,
     organism_indices: &mut Vec<usize>,
 ) {
@@ -698,10 +691,10 @@ pub fn reproduce(
                 _ => unreachable!(),
             }
 
-            let mut evaluated_node_genes =
+            let mut evaled_node_genes =
                 FxHashSet::<NodeGeneId>::with_hasher(BuildHasherDefault::default());
 
-            let mut evaluated_connection_genes =
+            let mut evaled_conn_genes =
                 FxHashSet::<ConnectionGeneId>::with_hasher(BuildHasherDefault::default());
 
             let mut queue = VecDeque::<NodeGeneId>::new();
@@ -709,17 +702,15 @@ pub fn reproduce(
 
             match &population.solution {
                 None => {
-                    cloned.fitness = CheckedF64::new(fitness(
-                        &mut EvaluationContext {
-                            organism: &mut cloned,
-                            inputs: &population.inputs,
-                            outputs: &population.outputs,
-                        },
-                        &mut evaluated_node_genes,
-                        &mut evaluated_connection_genes,
-                        &mut queue,
-                        &mut zipped,
-                    ));
+                    cloned.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
+                        organism: &mut cloned,
+                        inputs: &population.inputs,
+                        outputs: &population.outputs,
+                        evaled_node_genes: &mut evaled_node_genes,
+                        evaled_conn_genes: &mut evaled_conn_genes,
+                        queue: &mut queue,
+                        zipped: &mut zipped,
+                    }));
 
                     if cloned.fitness.as_float() >= SOLUTION_THRESHOLD {
                         eprintln!(
@@ -742,17 +733,15 @@ pub fn reproduce(
                     .cmp(&solution.number_of_hidden_node_genes())
                 {
                     Ordering::Less => {
-                        cloned.fitness = CheckedF64::new(fitness(
-                            &mut EvaluationContext {
-                                organism: &mut cloned,
-                                inputs: &population.inputs,
-                                outputs: &population.outputs,
-                            },
-                            &mut evaluated_node_genes,
-                            &mut evaluated_connection_genes,
-                            &mut queue,
-                            &mut zipped,
-                        ));
+                        cloned.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
+                            organism: &mut cloned,
+                            inputs: &population.inputs,
+                            outputs: &population.outputs,
+                            evaled_node_genes: &mut evaled_node_genes,
+                            evaled_conn_genes: &mut evaled_conn_genes,
+                            queue: &mut queue,
+                            zipped: &mut zipped,
+                        }));
 
                         if cloned.fitness.as_float() >= SOLUTION_THRESHOLD {
                             eprintln!(
@@ -773,17 +762,15 @@ pub fn reproduce(
                         if cloned.number_of_enabled_connection_genes()
                             < solution.number_of_enabled_connection_genes()
                         {
-                            cloned.fitness = CheckedF64::new(fitness(
-                                &mut EvaluationContext {
-                                    organism: &mut cloned,
-                                    inputs: &population.inputs,
-                                    outputs: &population.outputs,
-                                },
-                                &mut evaluated_node_genes,
-                                &mut evaluated_connection_genes,
-                                &mut queue,
-                                &mut zipped,
-                            ));
+                            cloned.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
+                                organism: &mut cloned,
+                                inputs: &population.inputs,
+                                outputs: &population.outputs,
+                                evaled_node_genes: &mut evaled_node_genes,
+                                evaled_conn_genes: &mut evaled_conn_genes,
+                                queue: &mut queue,
+                                zipped: &mut zipped,
+                            }));
 
                             if cloned.fitness.as_float() >= SOLUTION_THRESHOLD {
                                 eprintln!(

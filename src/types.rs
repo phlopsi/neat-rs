@@ -183,10 +183,22 @@ impl Distance {
     }
 }
 
-pub struct EvaluationContext<'a, 'b, 'c> {
-    pub(crate) organism: &'a mut Organism,
-    pub(crate) inputs: &'b [NodeGeneId],
-    pub(crate) outputs: &'c [NodeGeneId],
+pub struct EvaluationContext<
+    'organism,
+    'inputs,
+    'outputs,
+    'evaled_node_genes,
+    'evaled_conn_genes,
+    'queue,
+    'zipped,
+> {
+    pub(crate) organism: &'organism mut Organism,
+    pub(crate) inputs: &'inputs [NodeGeneId],
+    pub(crate) outputs: &'outputs [NodeGeneId],
+    pub(crate) evaled_node_genes: &'evaled_node_genes mut FxHashSet<NodeGeneId>,
+    pub(crate) evaled_conn_genes: &'evaled_conn_genes mut FxHashSet<ConnectionGeneId>,
+    pub(crate) queue: &'queue mut VecDeque<NodeGeneId>,
+    pub(crate) zipped: &'zipped mut Vec<(NodeGeneId, Value)>,
 }
 
 #[derive(Debug, Clone)]

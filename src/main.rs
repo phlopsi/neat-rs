@@ -134,56 +134,18 @@ fn main() {
 }
 
 #[inline]
-fn fitness(
-    context: &mut EvaluationContext,
-    evaluated_node_genes: &mut FxHashSet<NodeGeneId>,
-    evaluated_connection_genes: &mut FxHashSet<ConnectionGeneId>,
-    queue: &mut VecDeque<NodeGeneId>,
-    zipped: &mut Vec<(NodeGeneId, Value)>,
-) -> f32 {
+fn fitness(context: &mut EvaluationContext) -> f32 {
     let mut output_values_0 = Vec::<Value>::new();
-    evaluate(
-        &mut *context,
-        &[0.0, 0.0],
-        &mut *evaluated_node_genes,
-        &mut *evaluated_connection_genes,
-        &mut *queue,
-        &mut *zipped,
-        &mut output_values_0,
-    );
+    evaluate(&mut *context, &[0.0, 0.0], &mut output_values_0);
 
     let mut output_values_1 = Vec::<Value>::new();
-    evaluate(
-        &mut *context,
-        &[0.0, 1.0],
-        &mut *evaluated_node_genes,
-        &mut *evaluated_connection_genes,
-        &mut *queue,
-        &mut *zipped,
-        &mut output_values_1,
-    );
+    evaluate(&mut *context, &[0.0, 1.0], &mut output_values_1);
 
     let mut output_values_2 = Vec::<Value>::new();
-    evaluate(
-        &mut *context,
-        &[1.0, 0.0],
-        &mut *evaluated_node_genes,
-        &mut *evaluated_connection_genes,
-        &mut *queue,
-        &mut *zipped,
-        &mut output_values_2,
-    );
+    evaluate(&mut *context, &[1.0, 0.0], &mut output_values_2);
 
     let mut output_values_3 = Vec::<Value>::new();
-    evaluate(
-        &mut *context,
-        &[1.0, 1.0],
-        &mut *evaluated_node_genes,
-        &mut *evaluated_connection_genes,
-        &mut *queue,
-        &mut *zipped,
-        &mut output_values_3,
-    );
+    evaluate(&mut *context, &[1.0, 1.0], &mut output_values_3);
 
     1.0 - average_cost(
         &[&[0.0], &[1.0], &[1.0], &[0.0]],
