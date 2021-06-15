@@ -1,5 +1,6 @@
 #![feature(drain_filter)]
-#![feature(or_patterns)]
+#![allow(dead_code)]
+#![allow(unused_parens)]
 
 mod functions;
 mod types;

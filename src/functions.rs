@@ -7,7 +7,6 @@ use ::rustc_hash::FxHashMap;
 const MAXIMUM_AGE: u8 = u8::max_value();
 
 const MAX_DISTANCE_QUEUE_SIZE: usize = 1;
-const MAX_EVALUATION_QUEUE_SIZE: usize = 100;
 
 // const PROBABILITY_MUTATE_ONLY: f32 = 0.25;
 // const PROBABILITY_MATE_ONLY: f32 = 0.2;
@@ -25,11 +24,11 @@ const COEFFICIENT_WEIGHT_DIFFERENCE: Value = 1.0;
 
 pub fn test_performance() {
     fn fitness(
-        context: &mut EvaluationContext,
-        evaluated_node_genes: &mut FxHashSet<NodeGeneId>,
-        evaluated_connection_genes: &mut FxHashSet<ConnectionGeneId>,
-        queue: &mut VecDeque<NodeGeneId>,
-        zipped: &mut Vec<(NodeGeneId, Value)>,
+        _context: &mut EvaluationContext,
+        _evaluated_node_genes: &mut FxHashSet<NodeGeneId>,
+        _evaluated_connection_genes: &mut FxHashSet<ConnectionGeneId>,
+        _queue: &mut VecDeque<NodeGeneId>,
+        _zipped: &mut Vec<(NodeGeneId, Value)>,
     ) -> f32 {
         0.0
     }
@@ -560,7 +559,6 @@ fn mutate_add_node(
 #[inline]
 fn distance(connection_genes: &Vec<ConnectionGene>, from: NodeGeneId, to: NodeGeneId) -> Distance {
     use arraydeque::ArrayDeque;
-    use rustc_hash::FxHashSet;
 
     if from == to {
         return Distance::Finite(0);
@@ -1236,29 +1234,29 @@ pub fn eliminate_bad_organisms(organisms: &mut Vec<Organism>, solution: &Organis
     });
 }
 
-fn backpropagate(organism: &mut Organism, outputs: &[usize], ideal_output_activations: &[Value]) {
-    let Organism {
-        node_genes,
-        connection_genes,
-        fitness: _,
-        age: _,
-    } = organism;
-
-    for output in outputs {
-        let output_node_gene = node_gene_mut(node_genes, *output);
-    }
-    for node_gene in node_genes {
-        if node_gene.category.is_output() {
-            let actual_output_activation = node_gene.value;
-
-            for incoming_connection_gene in
-                incoming_connection_genes_mut(connection_genes, node_gene.id)
-            {
-                if incoming_connection_gene.state.is_enabled() {
-                    let weighted_input_activation = incoming_connection_gene.value;
-                }
-                // derivative_cost_divided_by_weight(input_activation: Value, weighted_input_activation, actual_output_activation, ideal_output_activation)
-            }
-        }
-    }
-}
+//fn backpropagate(organism: &mut Organism, outputs: &[usize], ideal_output_activations: &[Value]) {
+//    let Organism {
+//        node_genes,
+//        connection_genes,
+//        fitness: _,
+//        age: _,
+//    } = organism;
+//
+//    for output in outputs {
+//        let output_node_gene = node_gene_mut(node_genes, *output);
+//    }
+//    for node_gene in node_genes {
+//        if node_gene.category.is_output() {
+//            let actual_output_activation = node_gene.value;
+//
+//            for incoming_connection_gene in
+//                incoming_connection_genes_mut(connection_genes, node_gene.id)
+//            {
+//                if incoming_connection_gene.state.is_enabled() {
+//                    let weighted_input_activation = incoming_connection_gene.value;
+//                }
+//                // derivative_cost_divided_by_weight(input_activation: Value, weighted_input_activation, actual_output_activation, ideal_output_activation)
+//            }
+//        }
+//    }
+//}

@@ -151,6 +151,7 @@ fn fitness(
         &mut *zipped,
         &mut output_values_0,
     );
+
     let mut output_values_1 = Vec::<Value>::new();
     evaluate(
         &mut *context,
@@ -161,6 +162,7 @@ fn fitness(
         &mut *zipped,
         &mut output_values_1,
     );
+
     let mut output_values_2 = Vec::<Value>::new();
     evaluate(
         &mut *context,
@@ -171,6 +173,7 @@ fn fitness(
         &mut *zipped,
         &mut output_values_2,
     );
+
     let mut output_values_3 = Vec::<Value>::new();
     evaluate(
         &mut *context,
