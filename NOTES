@@ -1,0 +1,179 @@
+// VISUALIZATION ///////////////////////////////////////////////////////////////
+
+feedforward:
+input/bias -> hidden -> output
+
+backpropagate:
+output -> hidden -> input/bias
+
+
+// OPTIMIZED ///////////////////////////////////////////////////////////////////
+
+
+
+
+// ORIGINAL ////////////////////////////////////////////////////////////////////
+
+pub struct Organism {
+    pub node_genes: Vec<NodeGene>,
+    pub connection_genes: Vec<ConnectionGene>,
+    pub fitness: CheckedF64,
+    pub age: u8,
+}
+
+pub struct NodeGene {
+    pub id: NodeGeneId,
+    pub category: NodeGeneCategory,
+    pub value: Value,
+}
+
+pub struct ConnectionGene {
+    pub id: ConnectionGeneId,
+    pub source_id: NodeGeneId,
+    pub target_id: NodeGeneId,
+    pub state: ConnectionGeneState,
+    pub weight: Value,
+    pub value: Value,
+}
+
+pub enum NodeGeneCategory {
+    Bias,
+    Input,
+    Output,
+    Hidden,
+}
+
+pub enum ConnectionGeneState {
+    Disabled,
+    Enabled,
+}
+
+pub fn evaluate<'a, 'b, 'c>(
+    mut context: impl DerefMut<Target = EvaluationContext<'a, 'b, 'c>>,
+    input_values: &[Value],
+) -> Vec<Value> {
+    use arraydeque::ArrayDeque;
+    use rustc_hash::FxHashSet;
+    use std::hash::BuildHasherDefault;
+
+    const BIAS_ID: usize = 1;
+
+    let EvaluationContext {
+        organism,
+        inputs,
+        outputs,
+    } = &mut *context;
+
+    assert_eq!(inputs.len(), input_values.len());
+
+    let mut evaluated_node_genes = FxHashSet::<NodeGeneId>::with_capacity_and_hasher(
+        organism.node_genes.len() - outputs.len(),
+        BuildHasherDefault::default(),
+    );
+
+    let mut evaluated_connection_genes = FxHashSet::<ConnectionGeneId>::with_capacity_and_hasher(
+        organism.connection_genes.len(),
+        BuildHasherDefault::default(),
+    );
+
+    let mut queue = ArrayDeque::<[NodeGeneId; MAX_EVALUATION_QUEUE_SIZE]>::new();
+
+    // Initialize bias node gene value
+    node_gene_mut(&mut organism.node_genes, BIAS_ID).value = 1.0;
+    evaluated_node_genes.insert(BIAS_ID);
+
+    // Evaluate network inputs
+    {
+        let zipped = inputs
+            .iter()
+            .zip(input_values)
+            .map(|(node_gene_id, value)| (*node_gene_id, *value))
+            .collect::<Vec<(NodeGeneId, Value)>>();
+
+        for (node_gene_id, value) in zipped {
+            node_gene_mut(&mut organism.node_genes, node_gene_id).value = value;
+
+            // Extract into function? (Copy below)
+            {
+                evaluated_node_genes.insert(node_gene_id);
+
+                for connection_gene in
+                    outgoing_connection_genes_mut(&mut organism.connection_genes, node_gene_id)
+                        .filter(|connection_gene| connection_gene.state.is_enabled())
+                {
+                    connection_gene.value = value * connection_gene.weight;
+                    evaluated_connection_genes.insert(connection_gene.id);
+
+                    queue
+                        .push_back(connection_gene.target_id)
+                        .expect("maximum evaluation queue size reached");
+                }
+            }
+        }
+    }
+
+    // Evaluate the rest of the network
+    {
+        'queue: while let Option::Some(node_gene_id) = queue.pop_front() {
+            if evaluated_node_genes.contains(&node_gene_id) {
+                continue;
+            }
+
+            let mut value = 0.0;
+
+            for connection_gene in
+                incoming_connection_genes(&organism.connection_genes, node_gene_id)
+                    .filter(|connection_gene| connection_gene.state.is_enabled())
+            {
+                if !evaluated_connection_genes.contains(&connection_gene.id) {
+                    continue 'queue;
+                }
+
+                value += connection_gene.value;
+            }
+
+            value = sigmoid(value);
+            node_gene_mut(&mut organism.node_genes, node_gene_id).value = value;
+
+            // Extract into function? (Copied from above)
+            {
+                evaluated_node_genes.insert(node_gene_id);
+
+                for connection_gene in
+                    outgoing_connection_genes_mut(&mut organism.connection_genes, node_gene_id)
+                        .filter(|connection_gene| connection_gene.state.is_enabled())
+                {
+                    connection_gene.value = value * connection_gene.weight;
+                    evaluated_connection_genes.insert(connection_gene.id);
+                    queue
+                        .push_back(connection_gene.target_id)
+                        .expect("maximum evaluation queue size reached");
+                }
+            }
+        }
+    }
+
+    // Retrieve outputs
+    let output_values = {
+        let mut output_values = Vec::<Value>::with_capacity(outputs.len());
+
+        for node_gene_id in *outputs {
+            output_values.push(node_gene(&organism.node_genes, *node_gene_id).value);
+        }
+
+        output_values
+    };
+
+    // Zero values
+    organism
+        .node_genes
+        .iter_mut()
+        .for_each(|connection_gene| connection_gene.value = 0.0);
+
+    organism
+        .connection_genes
+        .iter_mut()
+        .for_each(|connection_gene| connection_gene.value = 0.0);
+
+    output_values
+}

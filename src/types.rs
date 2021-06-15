@@ -1,10 +1,16 @@
-use crate::Value;
 use ::core::cmp::Ordering;
 use ::core::hint::unreachable_unchecked;
 use ::rustc_hash::FxHashMap;
 
+pub use rustc_hash::FxHashSet;
+pub use std::collections::VecDeque;
+pub use std::hash::BuildHasherDefault;
+
 pub type NodeGeneId = usize;
 pub type ConnectionGeneId = usize;
+pub type OrganismIndex = usize;
+pub type Fitness = CheckedF64;
+pub type Value = f32;
 
 #[derive(Debug)]
 pub struct Population {
@@ -183,9 +189,7 @@ pub struct EvaluationContext<'a, 'b, 'c> {
     pub(crate) outputs: &'c [NodeGeneId],
 }
 
-pub(crate) type OrganismIndex = usize;
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Species {
     pub representative: OrganismIndex,
     pub remaining: Vec<SpeciatedOrganism>,
@@ -256,8 +260,56 @@ impl ::core::iter::Sum for CheckedF64 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SpeciatedOrganism {
     pub organism_index: OrganismIndex,
     pub genetic_distance: CheckedF64,
+}
+
+#[allow(dead_code)]
+struct Network {
+    vertices: Vec<VertexVector>,
+    edges: Vec<EdgeVector>,
+}
+
+impl Network {}
+
+pub unsafe fn feed_forward(vertices: Box<[Box<[VertexVector]>]>, edges: Box<[Box<[EdgeVector]>]>) {
+    use ::core::arch::x86_64::_mm256_add_ps;
+    use ::core::arch::x86_64::_mm256_mul_ps;
+
+    for (layers, weight_matrix) in vertices.windows(2).zip((&edges).into_iter()) {
+        // let layer = layers.get_unchecked(0);
+        // let next_layer = layers.get_unchecked(1);
+        let layer = &layers[0];
+        let next_layer = &layers[1];
+        let next_layer_len = next_layer.len();
+        let mut start = 0;
+
+        for source_vertex_vec in layer.into_iter() {
+            for (edge_vec, target_vertex_vec) in (&weight_matrix[start..start + next_layer_len])
+                .into_iter()
+                .zip(next_layer.into_iter())
+            {
+                target_vertex_vec.value.set(_mm256_add_ps(
+                    target_vertex_vec.value.get(),
+                    _mm256_mul_ps(source_vertex_vec.value.get(), edge_vec.weight),
+                ));
+            }
+
+            start += next_layer_len;
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone)]
+pub struct EdgeVector {
+    pub weight: ::core::arch::x86_64::__m256,
+}
+
+#[allow(dead_code)]
+#[derive(Clone)]
+pub struct VertexVector {
+    pub value: ::core::cell::Cell<::core::arch::x86_64::__m256>,
 }

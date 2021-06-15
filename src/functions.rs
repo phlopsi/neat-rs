@@ -1,11 +1,10 @@
 use crate::types::*;
-use crate::Value;
 use ::core::cmp::Ordering;
 use ::core::hint::unreachable_unchecked;
 use ::core::ops::DerefMut;
 use ::rustc_hash::FxHashMap;
 
-const MAXIMUM_AGE: u8 = 30;
+const MAXIMUM_AGE: u8 = u8::max_value();
 
 const MAX_DISTANCE_QUEUE_SIZE: usize = 1;
 const MAX_EVALUATION_QUEUE_SIZE: usize = 100;
@@ -24,12 +23,122 @@ const COEFFICIENT_EXCESS_GENES: Value = 1.0;
 const COEFFICIENT_DISJOINT_GENES: Value = 1.0;
 const COEFFICIENT_WEIGHT_DIFFERENCE: Value = 1.0;
 
+pub fn test_performance() {
+    fn fitness(
+        context: &mut EvaluationContext,
+        evaluated_node_genes: &mut FxHashSet<NodeGeneId>,
+        evaluated_connection_genes: &mut FxHashSet<ConnectionGeneId>,
+        queue: &mut VecDeque<NodeGeneId>,
+        zipped: &mut Vec<(NodeGeneId, Value)>,
+    ) -> f32 {
+        0.0
+    }
+
+    let population = initialize(1, 2, 1, fitness);
+    let mut o = population.initial_organism.clone();
+
+    o.node_genes.push(NodeGene {
+        id: 5,
+        category: NodeGeneCategory::Hidden,
+        value: 0.0,
+    });
+
+    o.connection_genes.push(ConnectionGene {
+        id: 1,
+        source_id: 2,
+        target_id: 4,
+        state: ConnectionGeneState::Enabled,
+        weight: 1.0,
+        value: 0.0,
+    });
+
+    o.connection_genes.push(ConnectionGene {
+        id: 2,
+        source_id: 3,
+        target_id: 4,
+        state: ConnectionGeneState::Enabled,
+        weight: 1.0,
+        value: 0.0,
+    });
+
+    o.connection_genes.push(ConnectionGene {
+        id: 3,
+        source_id: 1,
+        target_id: 5,
+        state: ConnectionGeneState::Enabled,
+        weight: 1.0,
+        value: 0.0,
+    });
+
+    o.connection_genes.push(ConnectionGene {
+        id: 4,
+        source_id: 2,
+        target_id: 5,
+        state: ConnectionGeneState::Enabled,
+        weight: 1.0,
+        value: 0.0,
+    });
+
+    o.connection_genes.push(ConnectionGene {
+        id: 5,
+        source_id: 3,
+        target_id: 5,
+        state: ConnectionGeneState::Enabled,
+        weight: 1.0,
+        value: 0.0,
+    });
+
+    o.connection_genes.push(ConnectionGene {
+        id: 6,
+        source_id: 5,
+        target_id: 4,
+        state: ConnectionGeneState::Enabled,
+        weight: 1.0,
+        value: 0.0,
+    });
+
+    let mut context = EvaluationContext {
+        organism: &mut o,
+        inputs: &population.inputs,
+        outputs: &population.outputs,
+    };
+
+    let mut evaluated_node_genes =
+        FxHashSet::<NodeGeneId>::with_hasher(BuildHasherDefault::default());
+
+    let mut evaluated_connection_genes =
+        FxHashSet::<ConnectionGeneId>::with_hasher(BuildHasherDefault::default());
+
+    let mut queue = VecDeque::<NodeGeneId>::new();
+
+    let mut zipped = Vec::<(NodeGeneId, Value)>::new();
+    let mut output_values_0 = Vec::<Value>::new();
+
+    let instant = ::std::time::Instant::now();
+    evaluate(
+        &mut context,
+        &[1.0, 1.0],
+        &mut evaluated_node_genes,
+        &mut evaluated_connection_genes,
+        &mut queue,
+        &mut zipped,
+        &mut output_values_0,
+    );
+    eprintln!("evaluate: {} ns", instant.elapsed().as_nanos());
+}
+
 #[inline]
 pub fn initialize(
     pop_size: usize,
     num_input: usize,
     num_output: usize,
-    mut fitness: impl FnMut(&mut EvaluationContext) -> Value,
+    mut fitness: impl FnMut(
+        &mut EvaluationContext,
+        &mut FxHashSet<NodeGeneId>,
+        &mut FxHashSet<ConnectionGeneId>,
+        &mut VecDeque<NodeGeneId>,
+        &mut Vec<(NodeGeneId, Value)>,
+    ) -> Value,
 ) -> Population {
     const NUM_BIAS: usize = 1;
 
@@ -76,11 +185,26 @@ pub fn initialize(
         outputs.push(id);
     }
 
-    organism.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
-        organism: &mut organism,
-        inputs: &inputs,
-        outputs: &outputs,
-    }));
+    let mut evaluated_node_genes =
+        FxHashSet::<NodeGeneId>::with_hasher(BuildHasherDefault::default());
+
+    let mut evaluated_connection_genes =
+        FxHashSet::<ConnectionGeneId>::with_hasher(BuildHasherDefault::default());
+
+    let mut queue = VecDeque::<NodeGeneId>::new();
+    let mut zipped = Vec::<(NodeGeneId, Value)>::new();
+
+    organism.fitness = CheckedF64::new(fitness(
+        &mut EvaluationContext {
+            organism: &mut organism,
+            inputs: &inputs,
+            outputs: &outputs,
+        },
+        &mut evaluated_node_genes,
+        &mut evaluated_connection_genes,
+        &mut queue,
+        &mut zipped,
+    ));
 
     let mut organisms = Vec::<Organism>::with_capacity(pop_size);
 
@@ -108,11 +232,12 @@ pub fn initialize(
 pub fn evaluate<'a, 'b, 'c>(
     mut context: impl DerefMut<Target = EvaluationContext<'a, 'b, 'c>>,
     input_values: &[Value],
-) -> Vec<Value> {
-    use arraydeque::ArrayDeque;
-    use rustc_hash::FxHashSet;
-    use std::hash::BuildHasherDefault;
-
+    evaluated_node_genes: &mut FxHashSet<NodeGeneId>,
+    evaluated_connection_genes: &mut FxHashSet<ConnectionGeneId>,
+    queue: &mut VecDeque<NodeGeneId>,
+    zipped: &mut Vec<(NodeGeneId, Value)>,
+    output_values: &mut Vec<Value>,
+) {
     const BIAS_ID: usize = 1;
 
     let EvaluationContext {
@@ -123,17 +248,9 @@ pub fn evaluate<'a, 'b, 'c>(
 
     assert_eq!(inputs.len(), input_values.len());
 
-    let mut evaluated_node_genes = FxHashSet::<NodeGeneId>::with_capacity_and_hasher(
-        organism.node_genes.len() - outputs.len(),
-        BuildHasherDefault::default(),
-    );
-
-    let mut evaluated_connection_genes = FxHashSet::<ConnectionGeneId>::with_capacity_and_hasher(
-        organism.connection_genes.len(),
-        BuildHasherDefault::default(),
-    );
-
-    let mut queue = ArrayDeque::<[NodeGeneId; MAX_EVALUATION_QUEUE_SIZE]>::new();
+    evaluated_node_genes.clear();
+    evaluated_connection_genes.clear();
+    queue.clear();
 
     // Initialize bias node gene value
     node_gene_mut(&mut organism.node_genes, BIAS_ID).value = 1.0;
@@ -141,13 +258,15 @@ pub fn evaluate<'a, 'b, 'c>(
 
     // Evaluate network inputs
     {
-        let zipped = inputs
-            .iter()
-            .zip(input_values)
-            .map(|(node_gene_id, value)| (*node_gene_id, *value))
-            .collect::<Vec<(NodeGeneId, Value)>>();
+        zipped.clear();
+        zipped.extend(
+            inputs
+                .iter()
+                .zip(input_values)
+                .map(|(node_gene_id, value)| (*node_gene_id, *value)),
+        );
 
-        for (node_gene_id, value) in zipped {
+        for &mut (node_gene_id, value) in zipped {
             node_gene_mut(&mut organism.node_genes, node_gene_id).value = value;
 
             // Extract into function? (Copy below)
@@ -161,9 +280,7 @@ pub fn evaluate<'a, 'b, 'c>(
                     connection_gene.value = value * connection_gene.weight;
                     evaluated_connection_genes.insert(connection_gene.id);
 
-                    queue
-                        .push_back(connection_gene.target_id)
-                        .expect("maximum evaluation queue size reached");
+                    queue.push_back(connection_gene.target_id);
                 }
             }
         }
@@ -202,24 +319,18 @@ pub fn evaluate<'a, 'b, 'c>(
                 {
                     connection_gene.value = value * connection_gene.weight;
                     evaluated_connection_genes.insert(connection_gene.id);
-                    queue
-                        .push_back(connection_gene.target_id)
-                        .expect("maximum evaluation queue size reached");
+                    queue.push_back(connection_gene.target_id);
                 }
             }
         }
     }
 
     // Retrieve outputs
-    let output_values = {
-        let mut output_values = Vec::<Value>::with_capacity(outputs.len());
+    output_values.clear();
 
-        for node_gene_id in *outputs {
-            output_values.push(node_gene(&organism.node_genes, *node_gene_id).value);
-        }
-
-        output_values
-    };
+    for node_gene_id in *outputs {
+        output_values.push(node_gene(&organism.node_genes, *node_gene_id).value);
+    }
 
     // Zero values
     organism
@@ -231,8 +342,6 @@ pub fn evaluate<'a, 'b, 'c>(
         .connection_genes
         .iter_mut()
         .for_each(|connection_gene| connection_gene.value = 0.0);
-
-    output_values
 }
 
 #[inline]
@@ -275,6 +384,16 @@ fn incoming_connection_genes<'a>(
 }
 
 #[inline]
+fn incoming_connection_genes_mut<'a>(
+    connection_genes: &'a mut Vec<ConnectionGene>,
+    node_gene_id: NodeGeneId,
+) -> impl Iterator<Item = &'a mut ConnectionGene> {
+    connection_genes
+        .iter_mut()
+        .filter(move |connection_gene| node_gene_id == connection_gene.target_id)
+}
+
+#[inline]
 fn mutate_add_connection(
     organism: &mut Organism,
     mutate_add_connection_history: &mut FxHashMap<(NodeGeneId, NodeGeneId), ConnectionGeneId>,
@@ -282,6 +401,7 @@ fn mutate_add_connection(
     thread_rng: &mut rand::rngs::ThreadRng,
 ) {
     use rand::seq::SliceRandom;
+    use NodeGeneCategory::*;
 
     loop {
         let choices = organism
@@ -292,35 +412,18 @@ fn mutate_add_connection(
         let source_id;
         let target_id;
 
-        match choices[0].category {
-            NodeGeneCategory::Bias | NodeGeneCategory::Input => match choices[1].category {
-                NodeGeneCategory::Bias | NodeGeneCategory::Input => {
-                    continue;
-                }
-                NodeGeneCategory::Hidden | NodeGeneCategory::Output => {
-                    source_id = choices[0].id;
-                    target_id = choices[1].id;
-                }
-            },
-            NodeGeneCategory::Hidden => match choices[1].category {
-                NodeGeneCategory::Bias | NodeGeneCategory::Input => {
-                    source_id = choices[1].id;
-                    target_id = choices[0].id;
-                }
-                NodeGeneCategory::Hidden | NodeGeneCategory::Output => {
-                    source_id = choices[0].id;
-                    target_id = choices[1].id;
-                }
-            },
-            NodeGeneCategory::Output => match choices[1].category {
-                NodeGeneCategory::Bias | NodeGeneCategory::Input | NodeGeneCategory::Hidden => {
-                    source_id = choices[1].id;
-                    target_id = choices[0].id;
-                }
-                NodeGeneCategory::Output => {
-                    continue;
-                }
-            },
+        match (choices[0].category, choices[1].category) {
+            (Bias | Input, Bias | Input) | (Output, Output) => {
+                continue;
+            }
+            (Bias | Input, Hidden | Output) | (Hidden, Hidden | Output) => {
+                source_id = choices[0].id;
+                target_id = choices[1].id;
+            }
+            (Hidden, Bias | Input) | (Output, Bias | Input | Hidden) => {
+                source_id = choices[1].id;
+                target_id = choices[0].id;
+            }
         }
 
         let connection_gene = organism
@@ -513,9 +616,17 @@ fn mutate_change_connection_weight(
 pub fn reproduce(
     population: &mut Population,
     genus: Vec<Species>,
-    mut fitness: impl FnMut(&mut EvaluationContext) -> Value,
+    mut fitness: impl FnMut(
+        &mut EvaluationContext,
+        &mut FxHashSet<NodeGeneId>,
+        &mut FxHashSet<ConnectionGeneId>,
+        &mut VecDeque<NodeGeneId>,
+        &mut Vec<(NodeGeneId, Value)>,
+    ) -> Value,
     thread_rng: &mut rand::rngs::ThreadRng,
+    organism_indices: &mut Vec<usize>,
 ) {
+    const SOLUTION_THRESHOLD: f32 = 99.0 / 100.0;
     use rand::distributions::weighted::alias_method::WeightedIndex;
     use rand::distributions::Distribution;
     use rand::seq::SliceRandom;
@@ -549,14 +660,15 @@ pub fn reproduce(
             / total_fitness.as_float())
         .ceil() as usize;
 
-        let organism_indices = ::core::iter::once(species.representative)
-            .chain(
+        organism_indices.clear();
+        organism_indices.extend(
+            ::core::iter::once(species.representative).chain(
                 species
                     .remaining
                     .iter()
                     .map(|speciated_organism| speciated_organism.organism_index),
-            )
-            .collect::<Vec<_>>();
+            ),
+        );
 
         let mut current_offspring = 0;
 
@@ -588,22 +700,38 @@ pub fn reproduce(
                 _ => unreachable!(),
             }
 
+            let mut evaluated_node_genes =
+                FxHashSet::<NodeGeneId>::with_hasher(BuildHasherDefault::default());
+
+            let mut evaluated_connection_genes =
+                FxHashSet::<ConnectionGeneId>::with_hasher(BuildHasherDefault::default());
+
+            let mut queue = VecDeque::<NodeGeneId>::new();
+            let mut zipped = Vec::<(NodeGeneId, Value)>::new();
+
             match &population.solution {
                 None => {
-                    cloned.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
-                        organism: &mut cloned,
-                        inputs: &population.inputs,
-                        outputs: &population.outputs,
-                    }));
+                    cloned.fitness = CheckedF64::new(fitness(
+                        &mut EvaluationContext {
+                            organism: &mut cloned,
+                            inputs: &population.inputs,
+                            outputs: &population.outputs,
+                        },
+                        &mut evaluated_node_genes,
+                        &mut evaluated_connection_genes,
+                        &mut queue,
+                        &mut zipped,
+                    ));
 
-                    if cloned.fitness.as_float() == 1.0 {
+                    if cloned.fitness.as_float() >= SOLUTION_THRESHOLD {
                         eprintln!(
                             "FOUND SOLUTION: {} hidden node genes; {} enabled connection genes",
                             cloned.number_of_hidden_node_genes(),
                             cloned.number_of_enabled_connection_genes()
                         );
 
-                        eliminate_bad_organisms(organisms, &cloned);
+                        eliminate_bad_organisms((&mut *organisms), &cloned);
+                        (&mut *organisms);
                         population.solution = Some(cloned);
                         return;
                     } else {
@@ -616,13 +744,19 @@ pub fn reproduce(
                     .cmp(&solution.number_of_hidden_node_genes())
                 {
                     Ordering::Less => {
-                        cloned.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
-                            organism: &mut cloned,
-                            inputs: &population.inputs,
-                            outputs: &population.outputs,
-                        }));
+                        cloned.fitness = CheckedF64::new(fitness(
+                            &mut EvaluationContext {
+                                organism: &mut cloned,
+                                inputs: &population.inputs,
+                                outputs: &population.outputs,
+                            },
+                            &mut evaluated_node_genes,
+                            &mut evaluated_connection_genes,
+                            &mut queue,
+                            &mut zipped,
+                        ));
 
-                        if cloned.fitness.as_float() == 1.0 {
+                        if cloned.fitness.as_float() >= SOLUTION_THRESHOLD {
                             eprintln!(
                                 "FOUND BETTER SOLUTION: {} hidden node genes; {} enabled connection genes",
                                 cloned.number_of_hidden_node_genes(),
@@ -641,13 +775,19 @@ pub fn reproduce(
                         if cloned.number_of_enabled_connection_genes()
                             < solution.number_of_enabled_connection_genes()
                         {
-                            cloned.fitness = CheckedF64::new(fitness(&mut EvaluationContext {
-                                organism: &mut cloned,
-                                inputs: &population.inputs,
-                                outputs: &population.outputs,
-                            }));
+                            cloned.fitness = CheckedF64::new(fitness(
+                                &mut EvaluationContext {
+                                    organism: &mut cloned,
+                                    inputs: &population.inputs,
+                                    outputs: &population.outputs,
+                                },
+                                &mut evaluated_node_genes,
+                                &mut evaluated_connection_genes,
+                                &mut queue,
+                                &mut zipped,
+                            ));
 
-                            if cloned.fitness.as_float() == 1.0 {
+                            if cloned.fitness.as_float() >= SOLUTION_THRESHOLD {
                                 eprintln!(
                                     "FOUND BETTER SOLUTION: {} hidden node genes; {} enabled connection genes",
                                     cloned.number_of_hidden_node_genes(),
@@ -673,6 +813,25 @@ pub fn reproduce(
 #[inline]
 fn sigmoid(x: Value) -> Value {
     1.0 / (1.0 + (-x).exp())
+}
+
+#[inline]
+fn sigmoid_derivative(x: Value) -> Value {
+    let s = sigmoid(x);
+    s * (1.0 - s)
+}
+
+#[inline]
+fn derivative_cost_divided_by_weight(
+    input_activation: Value,
+    weighted_input_activation: Value,
+    actual_output_activation: Value,
+    ideal_output_activation: Value,
+) -> Value {
+    input_activation
+        * sigmoid_derivative(weighted_input_activation)
+        * 2.0
+        * (actual_output_activation - ideal_output_activation)
 }
 
 // let mut genes1 = genes1.iter().peekable();
@@ -825,23 +984,26 @@ pub fn average_cost(expected_outputs: &[&[Value]], actual_outputs: &[&[Value]]) 
         / (actual_outputs.len() as Value)
 }
 
-type Fitness = CheckedF64;
+pub fn speciate(
+    organisms: &[Organism],
+    target_number_of_species: usize,
+    species_list: &mut Vec<Species>,
+    organisms_sorted_by_fitness: &mut Vec<(OrganismIndex, Fitness)>,
+) {
+    species_list.clear();
 
-pub fn speciate(organisms: &[Organism], target_number_of_species: usize) -> Vec<Species> {
-    let mut species_list = Vec::<Species>::with_capacity(target_number_of_species);
-
-    let mut organisms_sorted_by_fitness: Vec<(OrganismIndex, Fitness)> = organisms
-        .iter()
-        .enumerate()
-        .map(|(index, organism)| (index, organism.fitness))
-        .collect();
+    organisms_sorted_by_fitness.clear();
+    organisms_sorted_by_fitness.extend(
+        organisms
+            .iter()
+            .enumerate()
+            .map(|(index, organism)| (index, organism.fitness)),
+    );
 
     organisms_sorted_by_fitness.sort_unstable_by(|a, b| b.1.cmp(&a.1));
 
     {
-        let (representative, remaining) = organisms_sorted_by_fitness
-            .split_first()
-            .expect(format!("{}:{}:{}", file!(), line!(), column!()).as_str());
+        let (representative, remaining) = organisms_sorted_by_fitness.split_first().unwrap(); //expect(format!("{}:{}:{}", file!(), line!(), column!()).as_str());
 
         // dbg!(representative.1);
         let representative = representative.0;
@@ -937,8 +1099,6 @@ pub fn speciate(organisms: &[Organism], target_number_of_species: usize) -> Vec<
             remaining: new_remaining,
         });
     }
-
-    return species_list;
 }
 
 pub fn age(organisms: &mut Vec<Organism>) {
@@ -950,20 +1110,37 @@ pub fn age(organisms: &mut Vec<Organism>) {
 pub fn eliminate_a(organisms: &mut Vec<Organism>, genus: Vec<Species>) {
     let mut to_be_eliminated_organisms = genus
         .iter()
-        .filter(|species| organisms[species.representative].age == MAXIMUM_AGE)
-        .flat_map(|species| {
-            eprintln!(
-                "Dropped species with the following representative: {:?}",
-                organisms[species.representative].fitness.as_float()
-            );
-            ::core::iter::once(species.representative)
+        .map(|species| {
+            let mut mapped = ::core::iter::once(species.representative)
                 .chain(
                     species
                         .remaining
                         .iter()
                         .map(|speciated_organism| speciated_organism.organism_index),
                 )
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+
+            mapped.sort_unstable_by(|a, b| {
+                let a = &organisms[*a];
+                let b = &organisms[*b];
+
+                match b.fitness.cmp(&a.fitness) {
+                    Ordering::Less => Ordering::Less,
+                    Ordering::Equal => b.age.cmp(&a.age),
+                    Ordering::Greater => Ordering::Greater,
+                }
+            });
+
+            mapped
+        })
+        .filter(|species| organisms[species[0]].age == MAXIMUM_AGE)
+        .flat_map(|species| {
+            eprintln!(
+                "Dropped species. Highest fitness: {:?}",
+                organisms[species[0]].fitness.as_float()
+            );
+
+            species
         })
         .collect::<Vec<_>>();
 
@@ -1057,4 +1234,31 @@ pub fn eliminate_bad_organisms(organisms: &mut Vec<Organism>, solution: &Organis
             Ordering::Greater => true,
         }
     });
+}
+
+fn backpropagate(organism: &mut Organism, outputs: &[usize], ideal_output_activations: &[Value]) {
+    let Organism {
+        node_genes,
+        connection_genes,
+        fitness: _,
+        age: _,
+    } = organism;
+
+    for output in outputs {
+        let output_node_gene = node_gene_mut(node_genes, *output);
+    }
+    for node_gene in node_genes {
+        if node_gene.category.is_output() {
+            let actual_output_activation = node_gene.value;
+
+            for incoming_connection_gene in
+                incoming_connection_genes_mut(connection_genes, node_gene.id)
+            {
+                if incoming_connection_gene.state.is_enabled() {
+                    let weighted_input_activation = incoming_connection_gene.value;
+                }
+                // derivative_cost_divided_by_weight(input_activation: Value, weighted_input_activation, actual_output_activation, ideal_output_activation)
+            }
+        }
+    }
 }
